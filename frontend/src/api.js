@@ -1,4 +1,6 @@
-const BASE = '/api'
+// 개발: Vite proxy (/api → localhost:5000)
+// 프로덕션: VITE_API_BASE 환경변수로 백엔드 URL 지정
+const BASE = (import.meta.env.VITE_API_BASE || '') + '/api'
 
 export async function fetchPopulation(year, adm_cd = '', low_search = '1') {
   const params = new URLSearchParams({ year, low_search })
