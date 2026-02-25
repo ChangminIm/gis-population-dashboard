@@ -2,6 +2,7 @@ import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import MapExportButton from './MapExportButton'
 import MapWatermark from './MapWatermark'
+import { generateA4Png } from '../utils/exportMap'
 
 // YlOrRd 7단계 색상
 const COLORS = ['#ffffb2', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#b10026']
@@ -62,26 +63,43 @@ function getColor(value, breaks) {
   return COLORS[COLORS.length - 1]
 }
 
+function formatBreak(v, viewMode) {
+  if (viewMode === 'density') return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)
+  if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}억`
+  if (v >= 10_000) return `${Math.round(v / 10_000)}만`
+  return v.toLocaleString()
+}
+
 function formatValue(value, viewMode) {
   if (!value || value <= 0) return '데이터 없음'
   if (viewMode === 'density') return `${value.toLocaleString()} 명/㎢`
   return `${value.toLocaleString()} 명`
 }
 
+function buildLegendEntries(breaks, viewMode) {
+  if (!breaks || breaks.length === 0) return []
+  const entries = [{ color: NO_DATA_COLOR, label: '데이터 없음' }]
+  breaks.forEach((upper, i) => {
+    const lower = i === 0 ? 0 : breaks[i - 1]
+    entries.push({ color: COLORS[i], label: `${formatBreak(lower, viewMode)} ~ ${formatBreak(upper, viewMode)}` })
+  })
+  entries.push({
+    color: COLORS[COLORS.length - 1],
+    label: `${formatBreak(breaks[breaks.length - 1], viewMode)} 초과`,
+  })
+  return entries
+}
+
 // ─── 한국 전체 맞춤 헬퍼 ─────────────────────────────────────────────────────
 
 function FitKoreaBounds({ geojson, fitRef }) {
   const map = useMap()
-  // geojson 변경 시 한국 전체로 리셋
   useEffect(() => {
     if (geojson) map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
   }, [geojson]) // eslint-disable-line
-
-  // 버튼 콜백 등록
   useEffect(() => {
     if (fitRef) fitRef.current = () => map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
   }, [map, fitRef])
-
   return null
 }
 
@@ -92,8 +110,7 @@ function GeoJSONLayer({ geojson, activeMap, breaks, viewMode, onRegionClick }) {
 
   const style = (feature) => {
     const code = feature.properties?.adm_cd || ''
-    const value = activeMap[code] || 0
-    return { fillColor: getColor(value, breaks), weight: 1, opacity: 1, color: '#555', fillOpacity: 0.8 }
+    return { fillColor: getColor(activeMap[code] || 0, breaks), weight: 1, opacity: 1, color: '#555', fillOpacity: 0.8 }
   }
 
   if (!geojson) return null
@@ -127,18 +144,11 @@ function Legend({ breaks, viewMode }) {
   if (!breaks || breaks.length === 0) return null
   const label = viewMode === 'density' ? '인구 밀도 (명/㎢)' : '인구 수 (명)'
 
-  const formatBreak = (v) => {
-    if (viewMode === 'density') return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v.toFixed(0)
-    if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}억`
-    if (v >= 10_000) return `${Math.round(v / 10_000)}만`
-    return v.toLocaleString()
-  }
-
   const classes = breaks.map((upper, i) => ({
     color: COLORS[i],
-    label: `${formatBreak(i === 0 ? 0 : breaks[i - 1])} ~ ${formatBreak(upper)}`,
+    label: `${formatBreak(i === 0 ? 0 : breaks[i - 1], viewMode)} ~ ${formatBreak(upper, viewMode)}`,
   }))
-  classes.push({ color: COLORS[COLORS.length - 1], label: `${formatBreak(breaks[breaks.length - 1])} 초과` })
+  classes.push({ color: COLORS[COLORS.length - 1], label: `${formatBreak(breaks[breaks.length - 1], viewMode)} 초과` })
 
   return (
     <div className="absolute bottom-8 right-4 z-[1000] bg-white rounded-xl shadow-lg p-3 text-xs border border-gray-200">
@@ -159,7 +169,7 @@ function Legend({ breaks, viewMode }) {
 
 // ─── 메인 ────────────────────────────────────────────────────────────────────
 
-export default function MapView({ geojson, activeMap, viewMode, onRegionClick }) {
+export default function MapView({ geojson, activeMap, viewMode, onRegionClick, year }) {
   const fitRef = useRef(null)
 
   const breaks = useMemo(() => {
@@ -170,7 +180,20 @@ export default function MapView({ geojson, activeMap, viewMode, onRegionClick })
 
   const handleFitKorea = useCallback(() => fitRef.current?.(), [])
 
-  const exportFilename = `인구통계_${viewMode === 'density' ? '밀도' : '인구수'}`
+  const handleExport = useCallback(async (dpi) => {
+    const title    = viewMode === 'density' ? '인구 밀도 현황' : '인구 수 현황'
+    const subtitle = `${year}년 기준 · 전국 시군구 · Natural Breaks (Jenks) 7단계`
+
+    await generateA4Png({
+      geojson,
+      colorFn: (props) => getColor(activeMap[props?.adm_cd || ''] || 0, breaks),
+      title,
+      subtitle,
+      legendEntries: buildLegendEntries(breaks, viewMode),
+      filename: `인구통계_${viewMode === 'density' ? '밀도' : '인구수'}_${year}`,
+      dpi,
+    })
+  }, [geojson, activeMap, breaks, viewMode, year])
 
   return (
     <div id="pop-map-container" className="relative w-full h-full">
@@ -179,7 +202,6 @@ export default function MapView({ geojson, activeMap, viewMode, onRegionClick })
         boundsOptions={{ padding: [10, 10] }}
         className="w-full h-full"
       >
-        {/* CartoDB Positron - CORS 지원, 통계지도에 최적화된 깔끔한 배경 */}
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -197,11 +219,7 @@ export default function MapView({ geojson, activeMap, viewMode, onRegionClick })
       </MapContainer>
       <Legend breaks={breaks} viewMode={viewMode} />
       <MapWatermark subtitle="인구통계 시각화 대시보드" />
-      <MapExportButton
-        containerId="pop-map-container"
-        filename={exportFilename}
-        onFitKorea={handleFitKorea}
-      />
+      <MapExportButton onExport={handleExport} onFitKorea={handleFitKorea} />
     </div>
   )
 }

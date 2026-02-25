@@ -169,6 +169,7 @@ export default function App() {
               <MapView
                 geojson={pop.geojson} activeMap={activeMap}
                 viewMode={pop.viewMode} onRegionClick={pop.handleRegionClick}
+                year={pop.year}
               />
             </main>
           </>
@@ -201,6 +202,7 @@ export default function App() {
               <HotspotMap
                 geojson={hot.geojson} results={hot.results}
                 statType={hot.statType} onRegionClick={hot.onRegionClick}
+                year={hot.year} variable={hot.variable}
               />
             </main>
           </>

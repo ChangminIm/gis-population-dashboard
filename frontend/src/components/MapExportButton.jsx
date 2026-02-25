@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { exportMapAsPng } from '../utils/exportMap'
 
 const DPI_OPTIONS = [
   { label: '화면 (96)', value: 96 },
@@ -8,24 +7,24 @@ const DPI_OPTIONS = [
 ]
 
 /**
- * 지도 PNG 내보내기 플로팅 버튼
- * containerId: 캡처 대상 div id
- * filename: 저장 파일명 (확장자 제외)
- * onFitKorea: 한국 전체보기 콜백
+ * 지도 A4 PNG 내보내기 버튼
+ * onExport(dpi) : 부모에서 실제 generateA4Png 를 호출
+ * onFitKorea   : 한국 전체보기 콜백
  */
-export default function MapExportButton({ containerId, filename, onFitKorea }) {
+export default function MapExportButton({ onExport, onFitKorea }) {
   const [dpi, setDpi] = useState(300)
   const [exporting, setExporting] = useState(false)
   const [error, setError] = useState(null)
 
   const handleExport = async () => {
+    if (!onExport) return
     setExporting(true)
     setError(null)
     try {
-      await exportMapAsPng(containerId, filename, dpi)
+      await onExport(dpi)
     } catch (e) {
-      setError(e.message)
-      setTimeout(() => setError(null), 3000)
+      setError(e.message || '내보내기 오류')
+      setTimeout(() => setError(null), 4000)
     } finally {
       setExporting(false)
     }
@@ -61,14 +60,14 @@ export default function MapExportButton({ containerId, filename, onFitKorea }) {
           className="text-xs px-2.5 py-1.5 font-medium text-gray-700 hover:bg-gray-50 disabled:text-gray-300 flex items-center gap-1"
         >
           {exporting
-            ? <><span className="animate-spin inline-block">⏳</span> 저장 중…</>
-            : <><span>📷</span> PNG 저장</>
+            ? <><span className="inline-block animate-spin">⏳</span> 생성 중…</>
+            : <><span>📄</span> A4 저장</>
           }
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-600 text-xs px-2 py-1 rounded-lg max-w-[200px] text-center">
+        <div className="bg-red-50 border border-red-200 text-red-600 text-xs px-2 py-1 rounded-lg max-w-[220px] text-center">
           {error}
         </div>
       )}

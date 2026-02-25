@@ -2,6 +2,7 @@ import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import MapExportButton from './MapExportButton'
 import MapWatermark from './MapWatermark'
+import { generateA4Png } from '../utils/exportMap'
 
 // ─── 색상 설정 ────────────────────────────────────────────────────────────────
 
@@ -35,17 +36,12 @@ function getColor(item, statType) {
 
 function FitKoreaBounds({ results, fitRef }) {
   const map = useMap()
-
-  // 분석 결과 도착 시 한국 전체로 맞춤
   useEffect(() => {
     if (results) map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
   }, [results]) // eslint-disable-line
-
-  // 버튼 콜백 등록
   useEffect(() => {
     if (fitRef) fitRef.current = () => map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
   }, [map, fitRef])
-
   return null
 }
 
@@ -118,7 +114,7 @@ function HotspotLegend({ statType }) {
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
-export default function HotspotMap({ geojson, results, statType, onRegionClick }) {
+export default function HotspotMap({ geojson, results, statType, onRegionClick, year, variable }) {
   const fitRef = useRef(null)
 
   const resultMap = useMemo(() => {
@@ -128,7 +124,26 @@ export default function HotspotMap({ geojson, results, statType, onRegionClick }
 
   const handleFitKorea = useCallback(() => fitRef.current?.(), [])
 
-  const exportFilename = `핫스팟_${statType === 'moran' ? 'Moran' : 'GiStar'}`
+  const handleExport = useCallback(async (dpi) => {
+    if (!geojson || !results) throw new Error('분석 결과가 없습니다. 먼저 분석을 실행해 주세요.')
+
+    const palette     = statType === 'moran' ? MORAN_COLORS : GISTAR_COLORS
+    const methodName  = statType === 'moran' ? "Local Moran's I" : 'Getis-Ord Gi*'
+    const varName     = variable === 'density' ? '인구 밀도' : '인구 수'
+    const title       = `${methodName} 핫스팟 분석`
+    const subtitle    = `${year}년 기준 · 전국 시군구 · ${varName}`
+    const legendEntries = Object.entries(palette).map(([, v]) => ({ color: v.fill, label: v.label }))
+
+    await generateA4Png({
+      geojson,
+      colorFn: (props) => getColor(resultMap[props?.adm_cd || ''], statType),
+      title,
+      subtitle,
+      legendEntries,
+      filename: `핫스팟_${statType === 'moran' ? 'Moran' : 'GiStar'}_${year}`,
+      dpi,
+    })
+  }, [geojson, results, resultMap, statType, variable, year])
 
   return (
     <div id="hotspot-map-container" className="relative w-full h-full">
@@ -137,7 +152,6 @@ export default function HotspotMap({ geojson, results, statType, onRegionClick }
         boundsOptions={{ padding: [10, 10] }}
         className="w-full h-full"
       >
-        {/* CartoDB Positron - CORS 지원, 통계지도에 최적화된 깔끔한 배경 */}
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
           url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
@@ -154,11 +168,7 @@ export default function HotspotMap({ geojson, results, statType, onRegionClick }
       </MapContainer>
       {results && <HotspotLegend statType={statType} />}
       <MapWatermark subtitle="공간 핫스팟 분석" />
-      <MapExportButton
-        containerId="hotspot-map-container"
-        filename={exportFilename}
-        onFitKorea={handleFitKorea}
-      />
+      <MapExportButton onExport={handleExport} onFitKorea={handleFitKorea} />
     </div>
   )
 }
