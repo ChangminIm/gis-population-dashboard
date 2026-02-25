@@ -1,37 +1,32 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import MapExportButton from './MapExportButton'
 
-// YlOrRd 7단계 색상 (스크린샷 기준)
+// YlOrRd 7단계 색상
 const COLORS = ['#ffffb2', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#b10026']
 const NO_DATA_COLOR = '#d0d0d0'
 
-/**
- * Jenks Natural Breaks 알고리즘
- * data: 숫자 배열, numClasses: 분류 단계 수
- * returns: 각 클래스의 상한값 배열 (length = numClasses)
- */
+// 대한민국 경계 (WGS84)
+const KOREA_BOUNDS = [[33.0, 124.5], [38.9, 131.0]]
+
+// ─── Jenks Natural Breaks ────────────────────────────────────────────────────
+
 function jenksBreaks(data, numClasses) {
   const sorted = [...data].filter((v) => v > 0).sort((a, b) => a - b)
   const n = sorted.length
   if (n === 0) return []
   if (n <= numClasses) return sorted
 
-  // Caspall-Fisher 방법 (O(n²k))
   const mat1 = Array.from({ length: n + 1 }, () => new Array(numClasses + 1).fill(0))
   const mat2 = Array.from({ length: n + 1 }, () => new Array(numClasses + 1).fill(Infinity))
 
-  for (let i = 1; i <= numClasses; i++) {
-    mat1[1][i] = 1
-    mat2[1][i] = 0
-  }
+  for (let i = 1; i <= numClasses; i++) { mat1[1][i] = 1; mat2[1][i] = 0 }
 
   for (let l = 2; l <= n; l++) {
     let s1 = 0, s2 = 0, w = 0
     for (let m = 1; m <= l; m++) {
       const val = sorted[l - m]
-      w++
-      s2 += val * val
-      s1 += val
+      w++; s2 += val * val; s1 += val
       const v = s2 - (s1 * s1) / w
       const i4 = l - m
       if (i4 !== 0) {
@@ -47,7 +42,6 @@ function jenksBreaks(data, numClasses) {
     mat2[l][1] = s2 - (s1 * s1) / w
   }
 
-  // 역추적으로 경계값 추출
   const breaks = new Array(numClasses)
   breaks[numClasses - 1] = sorted[n - 1]
   let k = n
@@ -73,19 +67,32 @@ function formatValue(value, viewMode) {
   return `${value.toLocaleString()} 명`
 }
 
+// ─── 한국 전체 맞춤 헬퍼 ─────────────────────────────────────────────────────
+
+function FitKoreaBounds({ geojson, fitRef }) {
+  const map = useMap()
+  // geojson 변경 시 한국 전체로 리셋
+  useEffect(() => {
+    if (geojson) map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
+  }, [geojson]) // eslint-disable-line
+
+  // 버튼 콜백 등록
+  useEffect(() => {
+    if (fitRef) fitRef.current = () => map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
+  }, [map, fitRef])
+
+  return null
+}
+
+// ─── GeoJSON 레이어 ───────────────────────────────────────────────────────────
+
 function GeoJSONLayer({ geojson, activeMap, breaks, viewMode, onRegionClick }) {
   const map = useMap()
 
   const style = (feature) => {
     const code = feature.properties?.adm_cd || ''
     const value = activeMap[code] || 0
-    return {
-      fillColor: getColor(value, breaks),
-      weight: 1,
-      opacity: 1,
-      color: '#555',
-      fillOpacity: 0.8,
-    }
+    return { fillColor: getColor(value, breaks), weight: 1, opacity: 1, color: '#555', fillOpacity: 0.8 }
   }
 
   if (!geojson) return null
@@ -104,26 +111,19 @@ function GeoJSONLayer({ geojson, activeMap, breaks, viewMode, onRegionClick }) {
           { sticky: true, className: 'leaflet-tooltip-custom' },
         )
         layer.on({
-          mouseover(e) {
-            e.target.setStyle({ weight: 2.5, color: '#222', fillOpacity: 0.95 })
-            e.target.bringToFront()
-          },
-          mouseout(e) {
-            e.target.setStyle(style(feature))
-          },
-          click() {
-            onRegionClick({ code, name, value })
-            map.fitBounds(layer.getBounds(), { padding: [20, 20] })
-          },
+          mouseover(e) { e.target.setStyle({ weight: 2.5, color: '#222', fillOpacity: 0.95 }); e.target.bringToFront() },
+          mouseout(e)  { e.target.setStyle(style(feature)) },
+          click()      { onRegionClick({ code, name, value }); map.fitBounds(layer.getBounds(), { padding: [20, 20] }) },
         })
       }}
     />
   )
 }
 
+// ─── 범례 ─────────────────────────────────────────────────────────────────────
+
 function Legend({ breaks, viewMode }) {
   if (!breaks || breaks.length === 0) return null
-
   const label = viewMode === 'density' ? '인구 밀도 (명/㎢)' : '인구 수 (명)'
 
   const formatBreak = (v) => {
@@ -133,18 +133,11 @@ function Legend({ breaks, viewMode }) {
     return v.toLocaleString()
   }
 
-  const classes = breaks.map((upper, i) => {
-    const lower = i === 0 ? 0 : breaks[i - 1]
-    return {
-      color: COLORS[i],
-      label: `${formatBreak(lower)} ~ ${formatBreak(upper)}`,
-    }
-  })
-  // 마지막 클래스 (최댓값 초과)
-  classes.push({
-    color: COLORS[COLORS.length - 1],
-    label: `${formatBreak(breaks[breaks.length - 1])} 초과`,
-  })
+  const classes = breaks.map((upper, i) => ({
+    color: COLORS[i],
+    label: `${formatBreak(i === 0 ? 0 : breaks[i - 1])} ~ ${formatBreak(upper)}`,
+  }))
+  classes.push({ color: COLORS[COLORS.length - 1], label: `${formatBreak(breaks[breaks.length - 1])} 초과` })
 
   return (
     <div className="absolute bottom-8 right-4 z-[1000] bg-white rounded-xl shadow-lg p-3 text-xs border border-gray-200">
@@ -163,25 +156,36 @@ function Legend({ breaks, viewMode }) {
   )
 }
 
+// ─── 메인 ────────────────────────────────────────────────────────────────────
+
 export default function MapView({ geojson, activeMap, viewMode, onRegionClick }) {
-  // Jenks 분류 (activeMap 값 전체로 계산)
+  const fitRef = useRef(null)
+
   const breaks = useMemo(() => {
     const values = Object.values(activeMap).filter((v) => v > 0)
     if (values.length === 0) return []
-    return jenksBreaks(values, COLORS.length - 1) // 6 breaks → 7 classes
+    return jenksBreaks(values, COLORS.length - 1)
   }, [activeMap])
 
+  const handleFitKorea = useCallback(() => fitRef.current?.(), [])
+
+  const exportFilename = `인구통계_${viewMode === 'density' ? '밀도' : '인구수'}`
+
   return (
-    <div className="relative w-full h-full">
+    <div id="pop-map-container" className="relative w-full h-full">
       <MapContainer
-        center={[36.5, 127.5]}
-        zoom={7}
+        bounds={KOREA_BOUNDS}
+        boundsOptions={{ padding: [10, 10] }}
         className="w-full h-full"
       >
+        {/* CartoDB Positron - CORS 지원, 통계지도에 최적화된 깔끔한 배경 */}
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          subdomains="abcd"
+          maxZoom={19}
         />
+        <FitKoreaBounds geojson={geojson} fitRef={fitRef} />
         <GeoJSONLayer
           geojson={geojson}
           activeMap={activeMap}
@@ -191,6 +195,11 @@ export default function MapView({ geojson, activeMap, viewMode, onRegionClick })
         />
       </MapContainer>
       <Legend breaks={breaks} viewMode={viewMode} />
+      <MapExportButton
+        containerId="pop-map-container"
+        filename={exportFilename}
+        onFitKorea={handleFitKorea}
+      />
     </div>
   )
 }

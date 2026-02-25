@@ -1,5 +1,6 @@
-import { useMemo } from 'react'
+import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
+import MapExportButton from './MapExportButton'
 
 // ─── 색상 설정 ────────────────────────────────────────────────────────────────
 
@@ -21,9 +22,30 @@ const MORAN_COLORS = {
   ns: { fill: '#f0f0f0', label: '유의하지 않음',      text: '#666' },
 }
 
+// 대한민국 경계 (WGS84)
+const KOREA_BOUNDS = [[33.0, 124.5], [38.9, 131.0]]
+
 function getColor(item, statType) {
   const palette = statType === 'moran' ? MORAN_COLORS : GISTAR_COLORS
   return (palette[item?.cls] || palette['ns']).fill
+}
+
+// ─── 한국 전체 맞춤 헬퍼 ─────────────────────────────────────────────────────
+
+function FitKoreaBounds({ results, fitRef }) {
+  const map = useMap()
+
+  // 분석 결과 도착 시 한국 전체로 맞춤
+  useEffect(() => {
+    if (results) map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
+  }, [results]) // eslint-disable-line
+
+  // 버튼 콜백 등록
+  useEffect(() => {
+    if (fitRef) fitRef.current = () => map.fitBounds(KOREA_BOUNDS, { padding: [10, 10], animate: true })
+  }, [map, fitRef])
+
+  return null
 }
 
 // ─── 지도 레이어 ─────────────────────────────────────────────────────────────
@@ -78,7 +100,7 @@ function HotspotLayer({ geojson, resultMap, statType, onRegionClick }) {
 
 function HotspotLegend({ statType }) {
   const palette = statType === 'moran' ? MORAN_COLORS : GISTAR_COLORS
-  const title = statType === 'moran' ? "Local Moran's I" : 'Getis-Ord Gi*'
+  const title   = statType === 'moran' ? "Local Moran's I" : 'Getis-Ord Gi*'
 
   return (
     <div className="absolute bottom-8 right-4 z-[1000] bg-white rounded-xl shadow-lg p-3 text-xs border border-gray-200 min-w-[190px]">
@@ -96,18 +118,32 @@ function HotspotLegend({ statType }) {
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
 export default function HotspotMap({ geojson, results, statType, onRegionClick }) {
+  const fitRef = useRef(null)
+
   const resultMap = useMemo(() => {
     if (!results) return {}
     return Object.fromEntries(results.map((r) => [r.adm_cd, r]))
   }, [results])
 
+  const handleFitKorea = useCallback(() => fitRef.current?.(), [])
+
+  const exportFilename = `핫스팟_${statType === 'moran' ? 'Moran' : 'GiStar'}`
+
   return (
-    <div className="relative w-full h-full">
-      <MapContainer center={[36.5, 127.5]} zoom={7} className="w-full h-full">
+    <div id="hotspot-map-container" className="relative w-full h-full">
+      <MapContainer
+        bounds={KOREA_BOUNDS}
+        boundsOptions={{ padding: [10, 10] }}
+        className="w-full h-full"
+      >
+        {/* CartoDB Positron - CORS 지원, 통계지도에 최적화된 깔끔한 배경 */}
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+          subdomains="abcd"
+          maxZoom={19}
         />
+        <FitKoreaBounds results={results} fitRef={fitRef} />
         <HotspotLayer
           geojson={geojson}
           resultMap={resultMap}
@@ -116,6 +152,11 @@ export default function HotspotMap({ geojson, results, statType, onRegionClick }
         />
       </MapContainer>
       {results && <HotspotLegend statType={statType} />}
+      <MapExportButton
+        containerId="hotspot-map-container"
+        filename={exportFilename}
+        onFitKorea={handleFitKorea}
+      />
     </div>
   )
 }
