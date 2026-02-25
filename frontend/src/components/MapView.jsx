@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import MapExportButton from './MapExportButton'
+import MapWatermark from './MapWatermark'
 
 // YlOrRd 7단계 색상
 const COLORS = ['#ffffb2', '#fed976', '#feb24c', '#fd8d3c', '#fc4e2a', '#e31a1c', '#b10026']
@@ -195,6 +196,7 @@ export default function MapView({ geojson, activeMap, viewMode, onRegionClick })
         />
       </MapContainer>
       <Legend breaks={breaks} viewMode={viewMode} />
+      <MapWatermark subtitle="인구통계 시각화 대시보드" />
       <MapExportButton
         containerId="pop-map-container"
         filename={exportFilename}

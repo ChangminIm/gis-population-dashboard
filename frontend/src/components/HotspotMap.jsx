@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useRef, useCallback } from 'react'
 import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
 import MapExportButton from './MapExportButton'
+import MapWatermark from './MapWatermark'
 
 // ─── 색상 설정 ────────────────────────────────────────────────────────────────
 
@@ -152,6 +153,7 @@ export default function HotspotMap({ geojson, results, statType, onRegionClick }
         />
       </MapContainer>
       {results && <HotspotLegend statType={statType} />}
+      <MapWatermark subtitle="공간 핫스팟 분석" />
       <MapExportButton
         containerId="hotspot-map-container"
         filename={exportFilename}

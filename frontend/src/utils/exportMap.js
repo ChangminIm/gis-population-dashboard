@@ -1,4 +1,4 @@
-import html2canvas from 'html2canvas'
+import html2canvas from 'html2canvas-pro'
 
 /**
  * 지도 컨테이너를 PNG로 내보내기
