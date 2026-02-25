@@ -78,7 +78,9 @@ function useHotspot(years) {
   const [year, setYear] = useState('2023')
   const [variable, setVariable] = useState('population')
   const [statType, setStatType] = useState('gistar')
+  const [weightType, setWeightType] = useState('knn')
   const [k, setK] = useState(8)
+  const [distKm, setDistKm] = useState(50)
   const [geojson, setGeojson] = useState(null)
   const [results, setResults] = useState(null)
   const [statInfo, setStatInfo] = useState(null)
@@ -89,23 +91,28 @@ function useHotspot(years) {
   const runAnalysis = useCallback(async () => {
     setLoading(true); setError(null); setSelectedRegion(null)
     try {
-      // 전국 시군구 GeoJSON (시도별 병합)
       const geoPromises = ['11','21','22','23','24','25','26','29','31','32','33','34','35','36','37','38','39']
         .map((sido) => fetchBoundaryGeoJSON(year, sido, '1'))
       const geoResults = await Promise.all(geoPromises)
       const allFeatures = geoResults.flatMap((g) => g.features || [])
       setGeojson({ type: 'FeatureCollection', features: allFeatures })
 
-      const data = await fetchHotspot({ year, variable, statType, k })
+      const data = await fetchHotspot({ year, variable, statType, weightType, k, distKm })
       if (data.error) throw new Error(data.error)
       setResults(data.result)
-      setStatInfo({ n: data.n, k: data.k, variable: data.variable, year })
+      setStatInfo({
+        n: data.n, k: data.k, dist_km: data.dist_km,
+        variable: data.variable, weight_type: data.weight_type,
+        isolated: data.isolated ?? 0, year,
+      })
     } catch (e) { setError(e.message) } finally { setLoading(false) }
-  }, [year, variable, statType, k])
+  }, [year, variable, statType, weightType, k, distKm])
 
   return {
     year, setYear, variable, setVariable,
-    statType, setStatType, k, setK,
+    statType, setStatType,
+    weightType, setWeightType,
+    k, setK, distKm, setDistKm,
     geojson, results, statInfo,
     loading, error, selectedRegion,
     onRegionClick: (r) => setSelectedRegion(r),
@@ -171,7 +178,9 @@ export default function App() {
               year={hot.year} onYearChange={hot.setYear} years={years}
               variable={hot.variable} onVariableChange={hot.setVariable}
               statType={hot.statType} onStatTypeChange={hot.setStatType}
+              weightType={hot.weightType} onWeightTypeChange={hot.setWeightType}
               k={hot.k} onKChange={hot.setK}
+              distKm={hot.distKm} onDistKmChange={hot.setDistKm}
               onRun={hot.runAnalysis} loading={hot.loading}
               results={hot.results} statInfo={hot.statInfo}
               selectedRegion={hot.selectedRegion}

@@ -9,6 +9,8 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 from pyproj import Transformer
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from shapely.geometry import shape
+from shapely.errors import TopologicalError
 
 load_dotenv()
 
@@ -74,7 +76,7 @@ def norm_cdf(x):
 
 
 def build_knn_weights(coords, k):
-    """k-최근접 이웃 이진 가중치 행렬 구축 (EPSG:5179 좌표 사용)"""
+    """k-최근접 이웃 이진 가중치 행렬 (EPSG:5179 미터 좌표 사용)"""
     n = len(coords)
     W = np.zeros((n, n), dtype=np.float32)
     for i in range(n):
@@ -89,6 +91,89 @@ def build_knn_weights(coords, k):
         dists.sort()
         for _, j in dists[:k]:
             W[i][j] = 1.0
+    return W
+
+
+def build_distance_weights(coords, dist_m):
+    """거리 기준 이진 가중치 행렬 (dist_m: 미터)"""
+    n = len(coords)
+    W = np.zeros((n, n), dtype=np.float32)
+    dist_sq = dist_m ** 2
+    for i in range(n):
+        xi, yi = coords[i]
+        for j in range(n):
+            if i == j:
+                continue
+            dx = xi - coords[j][0]
+            dy = yi - coords[j][1]
+            if dx * dx + dy * dy <= dist_sq:
+                W[i][j] = 1.0
+    return W
+
+
+def build_contiguity_weights(features, codes, weight_type):
+    """
+    Queen / Rook / Bishop 인접 가중치 행렬
+      Queen  : 변 또는 꼭짓점 공유 (= Rook ∪ Bishop)
+      Rook   : 변(선분)만 공유
+      Bishop : 꼭짓점(점)만 공유
+    EPSG:5179 좌표 그대로 사용 (shapely는 CRS 무관하게 위상 연산)
+    """
+    code_to_idx = {c: i for i, c in enumerate(codes)}
+    n = len(codes)
+
+    # shapely 도형 구축 (유효하지 않으면 buffer(0)로 보정)
+    geoms = {}
+    for feat in features:
+        code = feat.get("properties", {}).get("adm_cd", "")
+        if code not in code_to_idx:
+            continue
+        try:
+            g = shape(feat["geometry"])
+            if not g.is_valid:
+                g = g.buffer(0)
+            geoms[code] = g
+        except Exception:
+            pass
+
+    W = np.zeros((n, n), dtype=np.float32)
+
+    code_list = [c for c in codes if c in geoms]
+    for a in range(len(code_list)):
+        ca = code_list[a]
+        ga = geoms[ca]
+        ia = code_to_idx[ca]
+        for b in range(a + 1, len(code_list)):
+            cb = code_list[b]
+            gb = geoms[cb]
+            ib = code_to_idx[cb]
+
+            # 바운딩박스 빠른 필터
+            if not ga.bounds[2] >= gb.bounds[0] - 1 or not gb.bounds[2] >= ga.bounds[0] - 1:
+                continue
+
+            try:
+                # 경계 교차만 확인 (touches = 내부는 겹치지 않고 경계만 접촉)
+                if not ga.touches(gb):
+                    continue
+                if weight_type == "queen":
+                    W[ia][ib] = W[ib][ia] = 1.0
+                    continue
+                # Rook / Bishop 구분: 경계 교선 유형 확인
+                inter = ga.boundary.intersection(gb.boundary)
+                itype = inter.geom_type
+                has_line = itype in ("LineString", "MultiLineString") or (
+                    itype == "GeometryCollection"
+                    and any(g.geom_type in ("LineString", "MultiLineString")
+                            for g in getattr(inter, "geoms", []))
+                )
+                if weight_type == "rook" and has_line:
+                    W[ia][ib] = W[ib][ia] = 1.0
+                elif weight_type == "bishop" and not has_line:
+                    W[ia][ib] = W[ib][ia] = 1.0
+            except TopologicalError:
+                pass
+
     return W
 
 
@@ -239,15 +324,19 @@ def api_hotspot():
     """
     전국 시군구 핫스팟 분석
     Query params:
-      year      - 기준연도
-      variable  - population | density
-      stat_type - gistar | moran
-      k         - k-최근접 이웃 수 (default: 8)
+      year        - 기준연도
+      variable    - population | density
+      stat_type   - gistar | moran
+      weight_type - knn | distance | queen | rook | bishop
+      k           - k-최근접 이웃 수 (weight_type=knn 시 사용, default: 8)
+      dist_km     - 거리 임계값 km (weight_type=distance 시 사용, default: 50)
     """
     year = request.args.get("year", "2023")
     variable = request.args.get("variable", "population")
     stat_type = request.args.get("stat_type", "gistar")
+    weight_type = request.args.get("weight_type", "knn")
     k = int(request.args.get("k", "8"))
+    dist_km = float(request.args.get("dist_km", "50"))
 
     try:
         token = get_access_token()
@@ -263,8 +352,9 @@ def api_hotspot():
                 timeout=20)
             return pop_r.json(), bnd_r.json()
 
-        pop_map = {}    # adm_cd → {pop, density}
+        pop_map = {}       # adm_cd → {pop, density, name}
         centroid_map = {}  # adm_cd → {x, y, name}
+        all_features = []  # 경계 피처 목록 (contiguity 가중치용)
 
         with ThreadPoolExecutor(max_workers=8) as ex:
             futures = {ex.submit(fetch_sido, c): c for c in SIDO_CODES}
@@ -287,11 +377,11 @@ def api_hotspot():
                             "y": float(props.get("y", 0)),
                             "name": props.get("adm_nm", ""),
                         }
+                        all_features.append(feat)
 
-        # 공통 코드 정렬 (재현성을 위해)
         codes = sorted([c for c in pop_map if c in centroid_map])
         n = len(codes)
-        if n < k + 1:
+        if n < 2:
             return jsonify({"error": f"분석 가능한 지역 수 부족 ({n}개)"}), 400
 
         values = np.array(
@@ -301,7 +391,18 @@ def api_hotspot():
         )
         coords = [(centroid_map[c]["x"], centroid_map[c]["y"]) for c in codes]
 
-        W = build_knn_weights(coords, k)
+        # 가중치 행렬 구축
+        if weight_type == "knn":
+            W = build_knn_weights(coords, min(k, n - 1))
+        elif weight_type == "distance":
+            W = build_distance_weights(coords, dist_km * 1000)
+        elif weight_type in ("queen", "rook", "bishop"):
+            W = build_contiguity_weights(all_features, codes, weight_type)
+        else:
+            W = build_knn_weights(coords, min(k, n - 1))
+
+        # 고립된 지역 확인 (neighbor 없으면 경고)
+        isolated = int(np.sum(W.sum(axis=1) == 0))
 
         if stat_type == "moran":
             stats_result = compute_local_moran(values, W)
@@ -322,8 +423,11 @@ def api_hotspot():
             "result": output,
             "stat_type": stat_type,
             "variable": variable,
+            "weight_type": weight_type,
             "n": n,
-            "k": k,
+            "k": k if weight_type == "knn" else None,
+            "dist_km": dist_km if weight_type == "distance" else None,
+            "isolated": isolated,
         })
 
     except Exception as e:

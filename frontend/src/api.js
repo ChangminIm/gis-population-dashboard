@@ -25,8 +25,14 @@ export async function fetchYears() {
   return data.years
 }
 
-export async function fetchHotspot({ year, variable, statType, k = 8 }) {
-  const params = new URLSearchParams({ year, variable, stat_type: statType, k })
+export async function fetchHotspot({ year, variable, statType, weightType = 'knn', k = 8, distKm = 50 }) {
+  const params = new URLSearchParams({
+    year, variable,
+    stat_type: statType,
+    weight_type: weightType,
+    k,
+    dist_km: distKm,
+  })
   const res = await fetch(`${BASE}/hotspot?${params}`)
   if (!res.ok) throw new Error('핫스팟 분석 요청 실패')
   return res.json()
